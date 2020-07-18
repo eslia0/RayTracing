@@ -1,0 +1,265 @@
+#version 430 core
+#define pi 3.14159265
+
+layout (local_size_x = 1, local_size_y = 1) in;
+layout (rgba32f, binding = 0) uniform image2D destTex;
+
+struct Camera {
+    vec3    pos;
+    vec3    rot;
+    float   fov;
+    float   reflectDepth;
+};
+
+struct Hit {
+    float   dist;
+    vec3    impact;
+    int     index;
+};
+
+struct Object {
+    float   type;
+    vec3    pos;
+    vec3    rot;
+    vec4    color;
+    vec3    vert1;
+    vec3    vert2;
+    vec3    vert3;
+    float   radius;
+    float   diffuse;
+    float   specular;
+    float   shininess;
+    float   reflect;
+};
+
+struct      Light {
+    vec3    pos;
+    vec4    color;
+};
+
+struct Result {
+    float   dist;
+    vec3    impact;
+    vec3    normal;
+    vec3    reflect;
+    vec4    color;
+    int     index;
+};
+
+uniform Camera uCamera;
+
+uniform int uObjectNum;
+uniform Object uObjects[20];
+
+uniform int uLightNum;
+uniform Light uLights[20];
+
+uniform vec2 uSize;
+
+vec3 calcDirVector(vec2 fpos) {
+    return vec3(
+        (uSize.x / 2) - fpos.x,
+        (uSize.y / 2) - fpos.y,
+        (uSize.x / 2) / tan(radians(uCamera.fov / 2))
+    );
+}
+
+mat3 VectorToRotationMatrix(vec3 vec) {
+    float angle1 = atan(-vec.x, vec.z);
+	float angle2 = atan(vec.y, sqrt(vec.x * vec.x + vec.z * vec.z));
+    
+	mat3 yaw = mat3(
+		cos(angle1), 0, sin(angle1),
+		0, 1, 0,
+		-sin(angle1), 0, cos(angle1)
+	);
+
+	mat3 pitch = mat3(
+		1, 0, 0,
+		0, cos(angle2), -sin(angle2),
+		0, sin(angle2), cos(angle2)
+	);
+    
+	return yaw * pitch;
+}
+
+float intersectSphere(vec3 camera, vec3 dir, float radius) {
+    float a = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
+    float b = 2 * dir.x * camera.x + 2 * dir.y * camera.y + 2 * dir.z * camera.z;
+    float c = camera.x * camera.x + camera.y * camera.y + camera.z * camera.z - radius * radius;
+
+    float delta = b * b - 4 * a * c;
+
+    if (delta < 0)
+        return -1.0;
+    else if (delta > 0) {
+        delta = sqrt(delta);
+        float root[2];
+        root[0] = (-b - delta) / (2 * a);
+        root[1] = (-b + delta) / (2 * a);
+        if (root[0] > 0)
+            if (root[1] > 0)
+                return (root[0] > root[1]) ? root[1] : root[0];
+            else
+                return root[0];
+        else
+            return (root[1] > 0) ? root[1] : -1.0;
+    } else
+        return -b / (2 * a);
+}
+
+float intersectPlane(vec3 camera, vec3 dir) {
+    vec3    normal = vec3(0, 1, 0);
+    float   n1 = dot(normal, camera);
+    float   n2 = dot(normal, dir);
+    float   d;
+
+    if (n2 == 0)
+        return -1.0;
+    d = -n1 / n2;
+    return (d < 0) ? -1.0 : d;
+}
+
+float intersectTriangle(vec3 camera, vec3 dir, int index){
+    vec3 v1 = uObjects[index].vert1;
+    vec3 v2 = uObjects[index].vert2;
+    vec3 v3 = uObjects[index].vert3;
+
+    vec3 e1 = v2 - v1;
+    vec3 e2 = v3 - v1;
+    vec3 h = cross(dir, e2);
+    float a = dot(e1, h);
+    if (a < 0.00001)
+        return -1.0f;
+
+    float f = 1 / a;
+    vec3 s = camera - v1;
+    float u = f * dot(s, h);
+	if (u < 0.0 || u > 1.0)
+        return -1.0f;
+
+    vec3 q = cross(s, e1);
+    float v = f * dot(dir, q);
+	if (v < 0.0 || u + v > 1.0)
+        return -1.0f;
+
+    float t = f * dot(e2, q);
+
+    if (t > 0)
+        return t;
+    else
+        return -1.0f;
+}
+
+vec3 getTriangleNormal(int index){
+    vec3 v1 = uObjects[index].vert2 - uObjects[index].vert1;
+    vec3 v2 = uObjects[index].vert3 - uObjects[index].vert1;
+
+    return cross(v1, v2);
+}
+
+float calcDiffuseComponent(vec3 normal, vec3 surfaceToLight) {
+    return max(dot(normal, surfaceToLight), 0.0);
+}
+
+float calcSpecularComponent(vec3 normal, vec3 surfaceToLight, vec3 surfaceToCamera, float shininess, float specular) {
+    if (dot(normal, surfaceToLight) < 0.0)
+        return 0.0;
+    vec3 lightReflect = reflect(-surfaceToLight, normal);
+    return pow(max(dot(lightReflect, surfaceToCamera), 0.0), shininess) * specular;
+}
+
+Result raytrace(vec3 camera, vec3 dirVec, int exclude) {
+    Result result;
+    Hit hit;
+
+    hit.dist = -1;
+    hit.index = -1;
+    
+    for (int i = 0; i < uObjectNum; i++) {
+        if (i == exclude) continue;
+        float potentialHit;
+        vec3 eye = camera - uObjects[i].pos;
+        vec3 dir = dirVec;
+
+        if (uObjects[i].type == 0)
+            potentialHit = intersectSphere(eye, dir, uObjects[i].radius);
+        else if (uObjects[i].type == 1)
+            potentialHit = intersectPlane(eye, dir);
+        else if (uObjects[i].type == 2)
+            potentialHit = intersectTriangle(eye, dir, i);
+
+        if (potentialHit != -1.0 && (hit.dist == -1 || potentialHit < hit.dist)) {
+            hit.dist = potentialHit;
+            hit.impact = eye + dir * hit.dist;
+            hit.index = i;
+        }
+    }
+
+    if (hit.dist == -1.0) {
+        result.dist = -1;
+        result.impact = vec3(-1, -1, -1);
+        result.color = vec4(0, 0, 0, 1);
+        return result;
+    }
+
+    result.dist = hit.dist;
+    result.color = uObjects[hit.index].color;
+
+    if (uObjects[hit.index].type == 0)
+        result.normal = hit.impact;
+    else if (uObjects[hit.index].type == 1)
+        result.normal = vec3(0, 1, 0);
+    else if (uObjects[hit.index].type == 2){
+        result.normal = getTriangleNormal(hit.index);
+    }
+
+    result.normal = normalize(result.normal);
+    result.reflect = reflect(dirVec, result.normal);
+    result.impact = hit.impact + uObjects[hit.index].pos;
+    
+    vec4 color = vec4(0, 0, 0, 1);
+    
+    for (int i = 0; i < uLightNum; i++) {
+        vec3 surfaceToLight = normalize(uLights[i].pos - result.impact);
+        vec3 surfaceToCamera = normalize(uCamera.pos - result.impact);
+        color += result.color * uLights[i].color * (
+                            calcDiffuseComponent(result.normal, surfaceToLight) + 
+                            calcSpecularComponent(result.normal, surfaceToLight, surfaceToCamera, uObjects[hit.index].shininess, uObjects[hit.index].specular));
+    }
+
+    result.color = color / uLightNum;
+    result.index = hit.index;
+
+    return result;
+}
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    vec2 fpos = vec2(pos.xy);
+    mat3 rot = VectorToRotationMatrix(uCamera.rot);
+    vec3 dirVec = rot * normalize(calcDirVector(fpos));
+    vec4 color;
+    Result result;
+    Result tmp;
+    Hit hit;
+    float reflectDepth;
+
+    bool exclude[20];
+    
+    result = raytrace(uCamera.pos, dirVec, -1);
+    color = result.color;
+    reflectDepth = uCamera.reflectDepth;
+    exclude[result.index] = true;
+
+    while (result.dist != -1.0 && uObjects[result.index].reflect != 0 && reflectDepth > 0 && !exclude[tmp.index]) {        
+        reflectDepth -= 1;
+        tmp = raytrace(result.impact, result.reflect, result.index);
+
+        color = (color * (1.0 - uObjects[result.index].reflect)) + (tmp.color * uObjects[result.index].reflect);
+        result = tmp;
+        exclude[result.index] = true;
+    }
+
+    imageStore(destTex, pos, color);
+}

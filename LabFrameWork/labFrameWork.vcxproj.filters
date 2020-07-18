@@ -1,0 +1,35 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="cube.cpp" />
+    <ClCompile Include="Source.cpp" />
+    <ClCompile Include="Viewer.cpp" />
+    <ClCompile Include="Sphere.cpp" />
+    <ClCompile Include="RayTracingScene.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="cube.h" />
+    <ClInclude Include="Loader.h" />
+    <ClInclude Include="ModelView.h" />
+    <ClInclude Include="Viewer.h" />
+    <ClInclude Include="Sphere.h" />
+    <ClInclude Include="RayTracingScene.h" />
+    <ClInclude Include="Callback.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="shaders\RayTracing.comp">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\RayTracing.frag">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\RayTracing.vert">
+      <Filter>shaders</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="shaders">
+      <UniqueIdentifier>{36e7ac2b-2307-4abf-8a25-036fa7b2c194}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
